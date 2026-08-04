@@ -1,0 +1,46 @@
+name: Build images
+
+on:
+  schedule:
+    - cron: '0 0 */2 * *'
+  push:
+    branches:
+      - master
+    paths:
+      - build.sh
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --privileged
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          pacman-key --init
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base base-devel openssh arch-install-scripts squashfs-tools
+      - name: Generate version tags
+        id: version
+        run: echo "tag=$(date +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
+      - name: Run build
+        run: |
+          chmod +x build.sh
+          bash build.sh
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "${{ steps.version.outputs.tag }}"
+          files: |
+            /images/vmlinux
+            /images/initramfs-linux.img
+            /images/rootfs.squashfs

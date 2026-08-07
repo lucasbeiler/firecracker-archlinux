@@ -1,0 +1,35 @@
+run_hook() {
+    mount_handler="bindboot_mount_handler"
+}
+
+bindboot_mount_handler() {
+    newroot="$1"
+
+    # root is the squashfs itself, read-only
+    mount -t squashfs -o ro /dev/vda "$newroot"
+
+    fstype=$(blkid -o value -s TYPE /dev/vdb 2>/dev/null || true)
+    if [ -z "$fstype" ]; then
+        echo "bindboot: /dev/vdb has no filesystem, formatting ext4..."
+        mkfs.ext4 -F -q /dev/vdb
+    else
+        echo "bindboot: /dev/vdb already formatted ($fstype), keeping as-is"
+    fi
+
+    mkdir -p /vdb
+    mount /dev/vdb /vdb
+    mkdir -p /vdb/var /vdb/home
+
+    # seed persistent dirs from the image on first boot
+    if [ ! -d /vdb/var/lib ]; then
+        cp -a "$newroot/var/." /vdb/var/
+    fi
+    if [ -z "$(ls -A /vdb/home 2>/dev/null)" ]; then
+        cp -a "$newroot/home/." /vdb/home/
+    fi
+
+    mount --move /vdb "$newroot/data/"
+
+    mount --bind "$newroot/data/var" "$newroot/var"
+    mount --bind "$newroot/data/home" "$newroot/home"
+}

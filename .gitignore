@@ -1,0 +1,7 @@
+*.ext4
+*.squashfs
+*.sfs
+vmlinu*
+*.img
+images/
+.version_tag

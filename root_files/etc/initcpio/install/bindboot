@@ -1,0 +1,11 @@
+build() {
+    add_module squashfs
+    add_binary blkid
+    add_binary mkfs.ext4
+    add_binary mount
+    add_binary cp
+    add_runscript
+}
+help() {
+    echo "bind squashfs(vda) + ext4(vdb) as root"
+}

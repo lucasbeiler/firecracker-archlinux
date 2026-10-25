@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_DIR="$(pwd -P)"
+[[ -d .git ]] || { echo "run this inside of a git project" >&2; exit 1; }
+
+PROJECT_NAME="$(basename -- "$PROJECT_DIR")"
+SANDBOX_HOME=/home/opencode
+SANDBOX_PROJECT="$SANDBOX_HOME/$PROJECT_NAME"
+
+mkdir -p "$HOME/.cache/opencode" "$HOME/.local/share/opencode" \
+         "$HOME/.local/state/opencode" "$HOME/.config/opencode"
+
+cat > "$HOME/.config/opencode/opencode.json" <<'EOF'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": false,
+  "share": "disabled",
+  "permission": {
+    "*": "allow",
+    "webfetch": { "*": "ask" },
+    "external_directory": { "*": "deny" },
+    "doom_loop": "ask"
+  },
+  "mcp": {},
+  "instructions": ["AGENTS.md"]
+}
+EOF
+
+DENY_NAME_PATTERNS=(
+  "*.env" "*.env.*" ".env*" "appsettings*json" "config*ts" "config*js" "config*json"
+  "*secret*" "*private*" "*credential*" "*password*" ".gitlab-ci.yml"
+  "*.pem" "*.key" "*.p12" "*.pfx" "id_rsa*" "id_ed25519*"
+  ".npmrc" ".netrc" ".pypirc"
+  "*.tfvars" "terraform.tfstate*" "*kubeconfig*"
+  "bootstrap.sh" "encrypt*.sh" "test-chart*.sh"
+)
+
+FIND_EXPR=()
+for pat in "${DENY_NAME_PATTERNS[@]}"; do
+  if [[ ${#FIND_EXPR[@]} -gt 0 ]]; then FIND_EXPR+=(-o); fi
+  FIND_EXPR+=(-iname "$pat")
+done
+
+MASK_ARGS=(--tmpfs "$SANDBOX_PROJECT/.git")
+
+for f in opencode.json opencode.jsonc; do
+  [[ -f "$PROJECT_DIR/$f" ]] && MASK_ARGS+=(--ro-bind "$PROJECT_DIR/$f" "$SANDBOX_PROJECT/$f")
+done
+[[ -d "$PROJECT_DIR/.opencode" ]] && MASK_ARGS+=(--ro-bind "$PROJECT_DIR/.opencode" "$SANDBOX_PROJECT/.opencode")
+
+while IFS= read -r -d '' path; do
+  rel="${path#"$PROJECT_DIR"/}"
+  target="$SANDBOX_PROJECT/$rel"
+  if [[ -d "$path" ]]; then
+    MASK_ARGS+=(--tmpfs "$target")
+  else
+    MASK_ARGS+=(--ro-bind /dev/null "$target")
+  fi
+done < <(find "$PROJECT_DIR" \
+           \( -path "$PROJECT_DIR/.git" -o -name node_modules \) -prune -o \
+           ! -type l \( "${FIND_EXPR[@]}" \) -print0)
+
+exec bwrap \
+  --die-with-parent --new-session \
+  --unshare-all --disable-userns --unshare-user --share-net \
+  --cap-drop ALL \
+  --clearenv \
+  \
+  --ro-bind-try /usr /usr \
+  --ro-bind-try /bin /bin \
+  --ro-bind-try /lib /lib \
+  --ro-bind-try /lib64 /lib64 \
+  \
+  --ro-bind-try /etc/ssl /etc/ssl \
+  --ro-bind-try /etc/ca-certificates /etc/ca-certificates \
+  --ro-bind-try /etc/resolv.conf /etc/resolv.conf \
+  --ro-bind-try /etc/hosts /etc/hosts \
+  --ro-bind-try /etc/nsswitch.conf /etc/nsswitch.conf \
+  --ro-bind-try /etc/ld.so.cache /etc/ld.so.cache \
+  --ro-bind-try /etc/alternatives /etc/alternatives \
+  \
+  --proc /proc --dev /dev --tmpfs /tmp \
+  \
+  --dir "$SANDBOX_HOME" \
+  --setenv HOME "$SANDBOX_HOME" \
+  --setenv USER opencode \
+  --setenv PATH /usr/local/bin:/usr/bin:/bin \
+  --setenv TERM "${TERM:-xterm-256color}" \
+  --setenv LANG "${LANG:-C.UTF-8}" \
+  \
+  --bind "$HOME/.config/opencode" "$SANDBOX_HOME/.config/opencode" \
+  --bind "$HOME/.cache/opencode" "$SANDBOX_HOME/.cache/opencode" \
+  --bind "$HOME/.local/share/opencode" "$SANDBOX_HOME/.local/share/opencode" \
+  --bind "$HOME/.local/state/opencode" "$SANDBOX_HOME/.local/state/opencode" \
+  --bind "$PROJECT_DIR" "$SANDBOX_PROJECT" \
+  "${MASK_ARGS[@]}" \
+  --chdir "$SANDBOX_PROJECT" \
+  "${@:-opencode}"
